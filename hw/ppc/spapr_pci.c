@@ -760,10 +760,52 @@ static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
                           pci_default_read_config(dev, PCI_VENDOR_ID, 2)));
     _FDT(fdt_setprop_cell(fdt, offset, "device-id",
                           pci_default_read_config(dev, PCI_DEVICE_ID, 2)));
+    _FDT(fdt_setprop_cell(fdt, offset, "revision-id",
+                          pci_default_read_config(dev, PCI_REVISION_ID, 1)));
+    _FDT(fdt_setprop_cell(fdt, offset, "class-code",
+                          pci_default_read_config(dev, PCI_CLASS_DEVICE, 2)));
+
+    /* NB: interrupts may not be returned for all devices - ? */
+    _FDT(fdt_setprop_cell(fdt, offset, "interrupts",
+                          pci_default_read_config(dev, PCI_CLASS_DEVICE, 2)));
+    
+    /* if this device is NOT a bridge */ 
+    if (PCI_HEADER_TYPE_NORMAL == 
+        pci_default_read_config(dev, PCI_HEADER_TYPE, 1)) {
+        
+        _FDT(fdt_setprop_cell(fdt, offset, "min-grant",
+                      pci_default_read_config(dev, PCI_MIN_GNT, 1)));
+        _FDT(fdt_setprop_cell(fdt, offset, "max-latency",
+                      pci_default_read_config(dev, PCI_MAX_LAT, 1)));
+        _FDT(fdt_setprop_cell(fdt, offset, "subsystem-id",
+                      pci_default_read_config(dev, PCI_SUBSYSTEM_ID, 2)));
+        _FDT(fdt_setprop_cell(fdt, offset, "subsystem-vendor-id",
+                      pci_default_read_config(dev, PCI_SUBSYSTEM_VENDOR_ID, 2)));
+    }
+    
+    _FDT(fdt_setprop_cell(fdt, offset, "cache-line-size",
+                          pci_default_read_config(dev, PCI_CACHE_LINE_SIZE, 1)));
+    
+    /* the following fdt cells are masked off the pci status register */
+    int pci_status = pci_default_read_config(dev, PCI_STATUS, 2);
+    _FDT(fdt_setprop_cell(fdt, offset, "devsel-speed", 
+                          PCI_STATUS_DEVSEL_MASK & pci_status));
+    _FDT(fdt_setprop_cell(fdt, offset, "fast-back-to-back", 
+                          PCI_STATUS_FAST_BACK & pci_status));
+    _FDT(fdt_setprop_cell(fdt, offset, "66mhz-capable", 
+                          PCI_STATUS_66MHZ & pci_status));
+    _FDT(fdt_setprop_cell(fdt, offset, "66mhz-capable", 
+                          PCI_STATUS_UDF & pci_status));
+
+    /* end of pci status register fdt cells */
 
     g_warning("NEW FDT");
     print_fdt(drc_entry->fdt, drc_entry->fdt_offset, -1);
 
+    /* need to allocate memory region for device BARs */
+
+
+    
     return 0;
 }
 
