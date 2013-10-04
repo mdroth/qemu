@@ -745,6 +745,58 @@ void spapr_pci_msi_init(sPAPREnvironment *spapr, hwaddr addr)
  * PHB PCI device
  */
 
+static int spapr_map_BARs(sPAPRPHBState *phb, PCIDevice *dev)
+{
+    /* Assumptions:
+     * each region that has been initialized will be set to:
+     * r->addr = PCI_BAR_UNMAPPED or a valid address
+     * r->size = BAR size, 0 means this is not a registered BAR
+     * r->type = BAR type (i/o or mem)
+     * r->memory = memory region
+     *
+     * the dev's BAR in config space will have the one's complement
+     * of the BAR size masked to the appropriate size.
+     * to get the BAR size, read the BAR from config space,
+     * invert (~) and add 1 while masking the information bits
+     *
+     * NB: using pci_bar_address() via pci_uddate_mappings()
+     * to get the bar address and size
+     */
+
+    PCIIORegion *r;
+    int i, ret = -1;
+
+    /* force the address space for registered memory regions
+     * to be the PHB - this is different from the generic
+     * pci behavior which uses default guest memory regions
+     * as the containers.
+     */
+
+    for (i = 0; i < PCI_NUM_REGIONS; i++) {
+        r = &dev->io_regions[i];
+        /* this region isn't registered */
+        if (!r->size) {
+            continue;
+        }
+
+        /* we need to map at least 1 BAR */
+        ret = 0;
+        if (r->type & PCI_BASE_ADDRESS_SPACE_IO) {
+            r->address_space = &phb->iospace;
+        } else {
+            r->address_space = &phb->memspace;
+        }
+        /* guarantee a limit into the BAR MemoryRegion */
+        r->memory->size = int128_make64(r->size);
+    }
+    /* map the BAR range as a subregion of the PHB range
+     * this call checks for conflicting subregions
+     * and warns if any are encountered.
+     */
+    pci_update_mappings(dev);
+    return ret;
+}
+
 static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
 {
     sPAPRPHBState *phb = SPAPR_PCI_HOST_BRIDGE(qdev);
@@ -768,6 +820,12 @@ static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
     drc_entry_slot = &drc_entry->child_entries[slot];
 
     g_warning("drc_entry_slot index = %d", drc_entry_slot->drc_index);
+
+
+    /* map memory region for device BARs */
+    if (-1 == spapr_map_BARs(phb, dev)) {
+        return -1;
+    }
 
     /* add OF node for pci device and required OF DT properties */
     fdt = g_malloc0(FDT_MAX_SIZE);
@@ -821,6 +879,12 @@ static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
     _FDT(fdt_property(fdt, "ibm,my-drc-index",
                       &drc_entry_slot->drc_index,
                       sizeof(drc_entry_slot->drc_index)));
+
+    char dev_fw_name_buf[32];
+    sprintf(dev_fw_name_buf, "unknown\n");
+    char *namep = pci_dev_fw_name(&dev->qdev, dev_fw_name_buf, 31);
+    _FDT(fdt_property_string(fdt, "name", namep));
+
     fdt_end_node(fdt);
     fdt_finish(fdt);
 
@@ -834,8 +898,6 @@ static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
 
     g_warning("NEW FDT");
     print_fdt(fdt, offset, -1);
-
-    /* need to allocate memory region for device BARs */
 
     return 0;
 }

@@ -82,7 +82,6 @@ static const TypeInfo pcie_bus_info = {
 };
 
 static PCIBus *pci_find_bus_nr(PCIBus *bus, int bus_num);
-static void pci_update_mappings(PCIDevice *d);
 static void pci_set_irq(void *opaque, int irq_num, int level);
 static int pci_add_option_rom(PCIDevice *pdev, bool is_default_rom);
 static void pci_del_option_rom(PCIDevice *pdev);
@@ -1080,7 +1079,7 @@ static pcibus_t pci_bar_address(PCIDevice *d,
     return new_addr;
 }
 
-static void pci_update_mappings(PCIDevice *d)
+void pci_update_mappings(PCIDevice *d)
 {
     PCIIORegion *r;
     int i;
@@ -2088,7 +2087,7 @@ static void pcibus_dev_print(Monitor *mon, DeviceState *dev, int indent)
     }
 }
 
-static char *pci_dev_fw_name(DeviceState *dev, char *buf, int len)
+char *pci_dev_fw_name(DeviceState *dev, char *buf, int len)
 {
     PCIDevice *d = (PCIDevice *)dev;
     const char *name = NULL;
