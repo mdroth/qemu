@@ -745,6 +745,124 @@ void spapr_pci_msi_init(sPAPREnvironment *spapr, hwaddr addr)
  * PHB PCI device
  */
 
+static MemoryRegionSection spapr_find_bar_mr(sPAPRPHBState *phb, PCIIORegion *r)
+{
+
+    /* search in (aligned) 1MB increments for now */
+    /* TODO: make the search increment tunable */
+    hwaddr addr_mask, increment = 0xfffffUL;
+    hwaddr start = 0UL, limit;
+
+    if (r->type == PCI_BASE_ADDRESS_SPACE_MEMORY) {
+        addr_mask = PCI_BASE_ADDRESS_MEM_MASK;
+        start = phb->mem_win_addr;
+    } else {
+        addr_mask = PCI_BASE_ADDRESS_IO_MASK;
+        start = phb->io_win_addr;
+    }
+    /* start search at the first correctly aligned address
+     * in the PHB memory region */
+
+    MemoryRegionSection mrs = {.size = {0, 0} };
+    hwaddr search_addr;
+    pcibus_t size;
+
+    search_addr = (start + ~((uint32_t)addr_mask - 1)) & (uint32_t)addr_mask;
+    increment &= (uint32_t)addr_mask;
+    size = r->size;
+    limit = memory_region_size(r->address_space) + r->address_space->addr;
+
+    do {
+        mrs = memory_region_find(r->address_space, search_addr, size);
+        if (mrs.mr) {
+            /* this memory region overlaps
+             * unreference and continue searching
+             */
+            memory_region_unref(mrs.mr);
+        }
+
+        search_addr += increment;
+        /* TODO: remove this mask probably not needed */
+        search_addr &= (uint32_t)addr_mask;
+    } while (int128_nz(mrs.size) &&  search_addr + size <= limit);
+
+    if (search_addr + size >= limit) {
+        /* we didn't find a region to map the BAR */
+        mrs.size = (struct Int128){.lo = -1, .hi = -1};
+    }
+
+    return mrs;
+}
+
+static int spapr_map_BARs(sPAPRPHBState *phb, PCIDevice *dev)
+{
+    /* Assumptions:
+     * each region that has been initialized will be set to:
+     * r->addr = PCI_BAR_UNMAPPED or a valid address
+     * r->size = BAR size, 0 means this is not a registered BAR
+     * r->type = BAR type (i/o or mem)
+     * r->memory = memory region, initialized but NOT mapped
+     */
+
+    PCIIORegion *r;
+    int i, ret = -1;
+
+    for (i = 0; i < PCI_NUM_REGIONS; i++) {
+        r = &dev->io_regions[i];
+        /* this region isn't registered */
+        if (!r->size) {
+            continue;
+        }
+
+        /* find a hw addr we can map */
+        MemoryRegionSection mrs = spapr_find_bar_mr(phb, r);
+        if (mrs.mr != NULL || (mrs.size.lo == -1 && mrs.size.hi == -1)) {
+            /* we can't find a non-overalapping memory region */
+            /* for this BAR */
+            /* TODO: make err message more descriptive */
+            fprintf(stderr, "Unable to map BAR\n");
+            if (mrs.mr != NULL) {
+                memory_region_unref(mrs.mr);
+            }
+
+            return -1;
+        }
+        if (!int128_nz(mrs.size)) {
+            /* we can probably map this region into memory
+             * if there is not a race condition with some
+             * other allocator. write the address to the
+             * device BAR which will force a call
+             * to pci_update_mappings
+             */
+
+            uint32_t bar_address = PCI_BASE_ADDRESS_0 + i * 4;
+            uint32_t bar_value_mask, bar_value;
+
+            if (r->type & PCI_BASE_ADDRESS_SPACE_IO) {
+                bar_value_mask = 0xfffffffcUL;
+            } else {
+                bar_value_mask = 0xfffffff0UL;
+            }
+
+            bar_value = (mrs.offset_within_address_space & bar_value_mask);
+
+            /* write the new bar value */
+            pci_default_write_config(dev, bar_address, bar_value, 1);
+
+            /* if this is a 64-bit BAR, we need to also write the
+             * uppper 32 bit value.
+             */
+            if (r->type & PCI_BASE_ADDRESS_MEM_TYPE_64) {
+                bar_value =
+                    ((mrs.offset_within_address_space >> 32) & 0xffffffffUL);
+                pci_default_write_config(dev, bar_address + 4, bar_value, 1);
+            }
+            ret = 0;
+        }
+    }
+    return ret;
+}
+
 static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
 {
     sPAPRPHBState *phb = SPAPR_PCI_HOST_BRIDGE(qdev);
@@ -836,7 +954,7 @@ static int spapr_phb_add_pci_dt(DeviceState *qdev, PCIDevice *dev)
     print_fdt(fdt, offset, -1);
 
     /* need to allocate memory region for device BARs */
-
+    spapr_map_BARs(phb, dev);
     return 0;
 }
 
