@@ -1155,34 +1155,42 @@ out:
 
 #define INTERFACE_PATH_BUF_SZ 512
 
-static DWORD get_interface_index(const char *guid)
+static DWORD get_interface_index(const char *guid, ULONG *index)
 {
-    ULONG index;
     DWORD status;
     wchar_t wbuf[INTERFACE_PATH_BUF_SZ];
     snwprintf(wbuf, INTERFACE_PATH_BUF_SZ, L"\\device\\tcpip_%s", guid);
     wbuf[INTERFACE_PATH_BUF_SZ - 1] = 0;
-    status = GetAdapterIndex (wbuf, &index);
-    if (status != NO_ERROR) {
-        return (DWORD)~0;
-    } else {
-        return index;
-    }
+    status = GetAdapterIndex (wbuf, index);
+    return status;
+    
 }
+
+#if (_WIN32_WINNT >= 0x0600)
 static int guest_get_network_stats(const char *name,
                        GuestNetworkInterfaceStat *stats)
 {
-    DWORD if_index = 0;
+    ULONG if_index = 0;
+    DWORD status;
     OSVERSIONINFO os_ver;
 
-    if_index = get_interface_index(name);
+    status = get_interface_index(name, &if_index);
+    if (status != NO_ERROR)
+        return -1;
     os_ver.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
     GetVersionEx(&os_ver);
     if (os_ver.dwMajorVersion >= 6) {
         MIB_IF_ROW2 a_mid_ifrow;
+        typedef NETIOAPI_API (WINAPI *getifentry2_t)(PMIB_IF_ROW2 Row);
         memset(&a_mid_ifrow, 0, sizeof(a_mid_ifrow));
         a_mid_ifrow.InterfaceIndex = if_index;
-        if (NO_ERROR == GetIfEntry2(&a_mid_ifrow)) {
+        HMODULE module = GetModuleHandle("iphlpapi");
+        PVOID fun = GetProcAddress(module, "GetIfEntry2");
+        if (fun == NULL) {
+            return -1;
+        }
+        getifentry2_t getifentry2_ex = (getifentry2_t)fun;
+        if (NO_ERROR == getifentry2_ex(&a_mid_ifrow)) {
             stats->rx_bytes = a_mid_ifrow.InOctets;
             stats->rx_packets = a_mid_ifrow.InUcastPkts;
             stats->rx_errs = a_mid_ifrow.InErrors;
@@ -1196,6 +1204,13 @@ static int guest_get_network_stats(const char *name,
     }
     return -1;
 }
+#else
+static int guest_get_network_stats(const char *name,
+                       GuestNetworkInterfaceStat *stats)
+{
+    return -1;
+}
+#endif
 
 GuestNetworkInterfaceList *qmp_guest_network_get_interfaces(Error **errp)
 {
