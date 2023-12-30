@@ -155,6 +155,7 @@ struct SevSnpGuestState {
     char *id_block;
     char *id_auth;
     char *host_data;
+    char *certs_path;
 
     struct kvm_sev_snp_launch_start kvm_start_conf;
     struct kvm_sev_snp_launch_finish kvm_finish_conf;
@@ -1320,6 +1321,67 @@ sev_snp_launch_finish(SevCommonState *sev_common)
     }
 }
 
+static int kvm_exit_coco_req_certs(struct kvm_run *run)
+{
+    struct kvm_exit_coco *coco = &run->coco;
+    g_autofree gchar *contents = NULL;
+    SevSnpGuestState *sev_snp_guest;
+    MemTxAttrs attrs = { 0 };
+    GError *error = NULL;
+    uint32_t npages;
+    hwaddr gpa;
+    void *guest_buf;
+    hwaddr buf_sz;
+    gsize sz;
+
+    g_warning("marker 0");
+
+    coco->req_certs.ret = KVM_EXIT_COCO_REQ_CERTS_ERR_GENERIC;
+
+    if (!sev_snp_enabled()) {
+        return -EINVAL;
+    }
+
+    gpa = coco->req_certs.gfn << TARGET_PAGE_BITS;
+    npages = coco->req_certs.npages;
+
+    g_warning("marker 1, gpa %lx npages %d", gpa, npages);
+
+    sev_snp_guest = SEV_SNP_GUEST(MACHINE(qdev_get_machine())->cgs);
+    if (!sev_snp_guest->certs_path) {
+        coco->req_certs.ret = 0;
+        return 0;
+    }
+
+    if (!g_file_get_contents(sev_snp_guest->certs_path, &contents, &sz, &error)) {
+        error_report("SEV: Failed to read '%s' (%s)", sev_snp_guest->certs_path,
+                     error->message);
+        g_error_free(error);
+        return 0;
+    }
+
+    buf_sz = npages * TARGET_PAGE_SIZE;
+    if (buf_sz < sz) {
+        coco->req_certs.ret = KVM_EXIT_COCO_REQ_CERTS_ERR_INVALID_LEN;
+        coco->req_certs.npages = (sz + TARGET_PAGE_SIZE) / TARGET_PAGE_SIZE;
+        return 0;
+    }
+
+    guest_buf = address_space_map(&address_space_memory, gpa, &buf_sz, true, attrs);
+    if (buf_sz < sz) {
+        g_warning("Unable to map entire shared buffer, mapped size %ld (expected %ld)",
+                  buf_sz, sz);
+        goto out_unmap;
+    }
+
+    memcpy(guest_buf, contents, buf_sz);
+    coco->req_certs.ret = 0;
+
+out_unmap:
+    address_space_unmap(&address_space_memory, guest_buf, buf_sz, true, buf_sz);
+
+    return 0;
+}
 
 static void
 sev_vm_state_change(void *opaque, bool running, RunState state)
@@ -1513,6 +1575,7 @@ static int sev_kvm_init(ConfidentialGuestSupport *cgs, Error **errp)
 
 static int sev_snp_kvm_init(ConfidentialGuestSupport *cgs, Error **errp)
 {
+    SevSnpGuestState *sev_snp_guest = SEV_SNP_GUEST(cgs);
     MachineState *ms = MACHINE(qdev_get_machine());
     X86MachineState *x86ms = X86_MACHINE(ms);
 
@@ -1520,6 +1583,13 @@ static int sev_snp_kvm_init(ConfidentialGuestSupport *cgs, Error **errp)
         x86ms->smm = ON_OFF_AUTO_OFF;
     } else if (x86ms->smm == ON_OFF_AUTO_ON) {
         error_setg(errp, "SEV-SNP does not support SMM.");
+        return -1;
+    }
+
+    if (sev_snp_guest->certs_path &&
+        kvm_register_coco_handler(kvm_state, KVM_EXIT_COCO_REQ_CERTS,
+                                  kvm_exit_coco_req_certs)) {
+        error_setg(errp, "failed to register handler for KVM_EXIT_COCO_REQ_CERTS events");
         return -1;
     }
 
@@ -2295,6 +2365,26 @@ sev_snp_guest_set_host_data(Object *obj, const char *value, Error **errp)
     memcpy(finish->host_data, blob, len);
 }
 
+static char *
+sev_snp_guest_get_certs_path(Object *obj, Error **errp)
+{
+    SevSnpGuestState *sev_snp_guest = SEV_SNP_GUEST(obj);
+
+    return g_strdup(sev_snp_guest->certs_path);
+}
+
+static void
+sev_snp_guest_set_certs_path(Object *obj, const char *value, Error **errp)
+{
+    SevSnpGuestState *sev_snp_guest = SEV_SNP_GUEST(obj);
+
+    if (sev_snp_guest->certs_path) {
+        g_free(sev_snp_guest->certs_path);
+    }
+
+    sev_snp_guest->certs_path = value ? g_strdup(value) : NULL;
+}
+
 static void
 sev_snp_guest_class_init(ObjectClass *oc, void *data)
 {
@@ -2329,6 +2419,9 @@ sev_snp_guest_class_init(ObjectClass *oc, void *data)
     object_class_property_add_str(oc, "host-data",
                                   sev_snp_guest_get_host_data,
                                   sev_snp_guest_set_host_data);
+    object_class_property_add_str(oc, "certs-path",
+                                  sev_snp_guest_get_certs_path,
+                                  sev_snp_guest_set_certs_path);
 }
 
 static void
