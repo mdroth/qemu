@@ -135,6 +135,22 @@ struct kvm_xen_exit {
 	} u;
 };
 
+struct kvm_exit_coco {
+#define KVM_EXIT_COCO_REQ_CERTS		0
+#define KVM_EXIT_COCO_MAX		1
+	__u8 nr;
+	__u8 pad0[7];
+	union {
+		struct {
+			__u64 gfn;
+			__u32 npages;
+#define KVM_EXIT_COCO_REQ_CERTS_ERR_INVALID_LEN		1
+#define KVM_EXIT_COCO_REQ_CERTS_ERR_GENERIC		(1 << 31)
+			__u32 ret;
+		} req_certs;
+	};
+};
+
 #define KVM_S390_GET_SKEYS_NONE   1
 #define KVM_S390_SKEYS_MAX        1048576
 
@@ -178,6 +194,7 @@ struct kvm_xen_exit {
 #define KVM_EXIT_NOTIFY           37
 #define KVM_EXIT_LOONGARCH_IOCSR  38
 #define KVM_EXIT_MEMORY_FAULT     39
+#define KVM_EXIT_COCO             40
 
 /* For KVM_EXIT_INTERNAL_ERROR */
 /* Emulate instruction failed. */
@@ -429,6 +446,8 @@ struct kvm_run {
 			__u64 gpa;
 			__u64 size;
 		} memory_fault;
+		/* KVM_EXIT_COCO */
+		struct kvm_exit_coco coco;
 		/* Fix the size of the union. */
 		char padding[256];
 	};
@@ -913,6 +932,8 @@ struct kvm_enable_cap {
 #define KVM_CAP_MEMORY_ATTRIBUTES 233
 #define KVM_CAP_GUEST_MEMFD 234
 #define KVM_CAP_VM_TYPES 235
+#define KVM_CAP_PRE_FAULT_MEMORY 236
+#define KVM_CAP_EXIT_COCO 237
 
 struct kvm_irq_routing_irqchip {
 	__u32 irqchip;
@@ -1217,9 +1238,9 @@ struct kvm_vfio_spapr_tce {
 /* Available with KVM_CAP_SPAPR_RESIZE_HPT */
 #define KVM_PPC_RESIZE_HPT_PREPARE _IOR(KVMIO, 0xad, struct kvm_ppc_resize_hpt)
 #define KVM_PPC_RESIZE_HPT_COMMIT  _IOR(KVMIO, 0xae, struct kvm_ppc_resize_hpt)
-/* Available with KVM_CAP_PPC_RADIX_MMU or KVM_CAP_PPC_HASH_MMU_V3 */
+/* Available with KVM_CAP_PPC_MMU_RADIX or KVM_CAP_PPC_MMU_HASH_V3 */
 #define KVM_PPC_CONFIGURE_V3_MMU  _IOW(KVMIO,  0xaf, struct kvm_ppc_mmuv3_cfg)
-/* Available with KVM_CAP_PPC_RADIX_MMU */
+/* Available with KVM_CAP_PPC_MMU_RADIX */
 #define KVM_PPC_GET_RMMU_INFO	  _IOW(KVMIO,  0xb0, struct kvm_ppc_rmmu_info)
 /* Available with KVM_CAP_PPC_GET_CPU_CHAR */
 #define KVM_PPC_GET_CPU_CHAR	  _IOR(KVMIO,  0xb1, struct kvm_ppc_cpu_char)
@@ -1542,6 +1563,15 @@ struct kvm_create_guest_memfd {
 	__u64 size;
 	__u64 flags;
 	__u64 reserved[6];
+};
+
+#define KVM_PRE_FAULT_MEMORY	_IOWR(KVMIO, 0xd5, struct kvm_pre_fault_memory)
+
+struct kvm_pre_fault_memory {
+	__u64 gpa;
+	__u64 size;
+	__u64 flags;
+	__u64 padding[5];
 };
 
 #endif /* __LINUX_KVM_H */
