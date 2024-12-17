@@ -594,4 +594,7 @@ void kvm_vcpufd_add_change_notifier(NotifierWithReturn *n);
  */
 void kvm_vcpufd_remove_change_notifier(NotifierWithReturn *n);
 
+typedef void ImmediateExitCb(void *opaque);
+void add_immediate_exit_callback(CPUState *cpu, ImmediateExitCb *cb, void *opaque);
+
 #endif
