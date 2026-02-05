@@ -22,6 +22,7 @@
 #include "qemu/madvise.h"
 #include "qemu/cutils.h"
 #include "hw/qdev-core.h"
+#include "trace.h"
 
 #ifdef CONFIG_NUMA
 #include <numaif.h>
@@ -88,6 +89,7 @@ static bool host_memory_prealloc_mem(HostMemoryBackend *backend, bool async, Err
         convert.size = sz;
         convert.attributes = KVM_MEMORY_ATTRIBUTE_PRIVATE;
 
+        trace_guest_memfd_set_memory_attributes(convert.offset, convert.size, convert.attributes);
         ret = gmem_ioctl(fd, KVM_SET_MEMORY_ATTRIBUTES2, &convert);
         if (ret) {
             error_setg(errp, "Error setting guest_memfd to private prior to preallocation, ret %d fd %d size %ld",
